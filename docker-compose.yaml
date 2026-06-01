@@ -1,0 +1,80 @@
+####
+#### Vault MCP Server — StreamableHTTP transport with optional browser OAuth.
+####
+#### Quickstart (developer bypass, no browser OAuth):
+####   export VAULT_ADDR=https://vault.seceng-iam.viasat.io
+####   export VAULT_TOKEN=hvs....          # from `vault login`
+####   docker compose up --build
+####
+#### Browser OAuth (MCP server acts as its own OAuth Authorization Server):
+####   export MCP_AUTH_SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+####   docker compose up --build
+####   # MCP clients discover /.well-known/* and are directed to /vault/login to
+####   # authenticate (LDAP / userpass / token / OIDC SSO) against VAULT_ADDR.
+####   # OIDC SSO uses http://localhost:8250/oidc/callback — the Vault CLI's
+####   # pre-registered redirect URI — so no Vault admin changes are needed.
+####
+services:
+  vault-mcp-server:
+    image: vionix.docker.artifactory.viasat.com/agentic/customer-service/tools/vault-mcp-server
+
+    platform: linux/x86_64
+    build:
+      context: .
+      target: dev
+
+    # The `dev` image defaults to `stdio`; run the StreamableHTTP transport on 8250.
+    command: ["./vault-mcp-server", "streamable-http", "--transport-host", "0.0.0.0", "--transport-port", "8250"]
+
+    ports:
+      - "8250:8250"
+
+    restart: unless-stopped
+
+    volumes:
+      # Primes / caches the Viasat private CA bundle so TLS to vault.seceng-iam.viasat.io
+      # is trusted. If the file is missing it is fetched from VIASAT_IO_CACERT_URL on startup.
+      - ./data/certs:/viasat/certs
+
+    environment:
+      # --- Transport ---
+      TRANSPORT_MODE: streamable-http
+      TRANSPORT_HOST: 0.0.0.0
+      TRANSPORT_PORT: "8250"
+      MCP_ENDPOINT: ${MCP_ENDPOINT:-/mcp}
+
+      # Public URL advertised in OAuth metadata and redirects. Override when fronted
+      # by a reverse proxy / public hostname.
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-http://localhost:8250}
+
+      # --- OAuth (browser login). Leave unset to disable OAuth and use VAULT_TOKEN below. ---
+      # 32 random bytes, base64url (no padding). Generate with:
+      #   openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+      MCP_AUTH_SECRET: ${MCP_AUTH_SECRET:-}
+
+      # --- Upstream Vault ---
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.seceng-iam.viasat.io}
+      VAULT_NAMESPACE: ${VAULT_NAMESPACE:-}
+
+      # Developer bypass: set VAULT_TOKEN (e.g. via .env) to skip browser OAuth entirely.
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+
+      # --- TLS trust (Viasat private CA) ---
+      VAULT_CACERT: ${VAULT_CACERT:-/viasat/certs/viasat.io.pem}
+      VIASAT_IO_CACERT_FILE: ${VIASAT_IO_CACERT_FILE:-/viasat/certs/viasat.io.pem}
+      VIASAT_IO_CACERT_URL: ${VIASAT_IO_CACERT_URL:-https://cacerts.viasat.io/all-certs.crt}
+
+      # --- Vault auth methods used by the login page ---
+      VAULT_AUTH_LDAP_MOUNT: ${VAULT_AUTH_LDAP_MOUNT:-ldap}
+      VAULT_AUTH_USERPASS_MOUNT: ${VAULT_AUTH_USERPASS_MOUNT:-userpass}
+      VAULT_OIDC_MOUNT: ${VAULT_OIDC_MOUNT:-oidc}
+      VAULT_OIDC_ROLE: ${VAULT_OIDC_ROLE:-}
+      # OIDC callback is handled by this server at /oidc/callback (port 8250 matches
+      # Vault's pre-registered redirect URI — no second listener needed).
+      VAULT_OIDC_CALLBACK_PORT: "0"
+
+      # --- CORS (StreamableHTTP). development allows localhost origins. ---
+      MCP_CORS_MODE: ${MCP_CORS_MODE:-development}
+
+      # --- Logging ---
+      LOG_LEVEL: ${LOG_LEVEL:-info}
