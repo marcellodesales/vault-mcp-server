@@ -80,6 +80,16 @@ The server can be configured using environment variables:
 - `MCP_RATE_LIMIT_GLOBAL`: Global rate limit (format: `rps:burst`) (default: `10:20`)
 - `MCP_RATE_LIMIT_SESSION`: Per-session rate limit (format: `rps:burst`) (default: `5:10`)
 
+OAuth / browser login (see [Browser OAuth](#browser-oauth-vault-login)):
+
+- `MCP_AUTH_SECRET`: base64url (32-byte) key that seals OAuth tokens. **Setting it enables OAuth**; unset disables it.
+- `MCP_SERVER_URL`: public base URL advertised in OAuth metadata/redirects (default: derived per-request from the `Host` / `X-Forwarded-*` headers)
+- `MCP_AUTH_CODE_TTL`: lifetime of authorization codes / login state (default: `5m`)
+- `MCP_AUTH_ACCESS_TTL`: lifetime of bearer access tokens (default: `12h`)
+- `VAULT_CACERT`: PEM CA bundle path used to verify the upstream Vault TLS cert (e.g. `/viasat/certs/viasat.io.pem`)
+- `VIASAT_IO_CACERT_FILE` / `VIASAT_IO_CACERT_URL`: location and source URL of the Viasat private CA bundle; fetched on startup only when the file is missing
+- `VAULT_AUTH_LDAP_MOUNT` (default `ldap`), `VAULT_AUTH_USERPASS_MOUNT` (default `userpass`), `VAULT_OIDC_MOUNT` (default `oidc`), `VAULT_OIDC_ROLE` (optional): Vault auth method mounts used by the login page
+
 ## HTTP Mode Configuration
 
 In HTTP mode, Vault configuration can be provided through multiple methods (in order of precedence):
@@ -93,8 +103,64 @@ In HTTP mode, Vault configuration can be provided through multiple methods (in o
 The HTTP server includes a comprehensive middleware stack:
 
 - **CORS Middleware**: Enables cross-origin requests with appropriate headers
+- **Bearer (OAuth) Middleware**: When OAuth is enabled, unseals the bearer token and injects the Vault credentials into the request context
 - **Vault Context Middleware**: Extracts Vault configuration and adds to request context
 - **Logging Middleware**: Structured HTTP request logging
+
+## Browser OAuth (Vault login)
+
+In HTTP mode the server can act as its own **OAuth 2.1 Authorization Server** so an
+interactive MCP client (Claude, an agentic CLI, etc.) is handed a URL to authenticate
+against your Vault in the browser — no token copy/paste required. The Vault token obtained
+during login is encrypted (AES-256-GCM) into the OAuth bearer token; nothing is stored
+server-side (the flow is fully stateless).
+
+OAuth is **opt-in**: it activates only when `MCP_AUTH_SECRET` is set. With it unset, the
+server behaves exactly as before (Vault token via env/header — see the developer bypass below).
+
+Enable it:
+
+```bash
+# 32 random bytes, base64url (no padding)
+export MCP_AUTH_SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+export VAULT_ADDR=https://vault.seceng-iam.viasat.io
+docker compose up --build
+```
+
+### How it works
+
+1. The MCP client discovers `/.well-known/oauth-protected-resource/mcp` and
+   `/.well-known/oauth-authorization-server`, dynamically registers (`/register`), and opens
+   `/authorize` (authorization code + PKCE).
+2. `/authorize` redirects the browser to `/vault/login`, which offers four ways to authenticate:
+   - **LDAP** — `auth/<ldap mount>/login/<user>`
+   - **Userpass** — `auth/<userpass mount>/login/<user>`
+   - **Vault token** — paste an existing token (validated via `auth/token/lookup-self`)
+   - **OIDC (SSO)** — Vault `auth/<oidc mount>/oidc/auth_url`; the browser is sent to your IdP
+     and returns to `/vault/oidc/callback`. The callback URL is computed **dynamically from the
+     current host**, so it works behind any hostname/reverse proxy.
+3. On success the client receives an authorization code, exchanges it at `/token`, and uses the
+   returned `Bearer` token on `/mcp`. An invalid/expired token yields `401` with a
+   `WWW-Authenticate` challenge so the client re-authenticates.
+
+> **OIDC note:** the dynamic callback `https://<host>/vault/oidc/callback` must be present in the
+> Vault OIDC role's `allowed_redirect_uris`. Set the role via `VAULT_OIDC_ROLE`.
+
+### TLS to a private Vault (the Viasat CA)
+
+To trust `https://vault.seceng-iam.viasat.io`, mount the Viasat private CA bundle and point
+`VAULT_CACERT` at it. The `docker-compose.yaml` mounts `./data/certs:/viasat/certs` and, when the
+bundle file is missing, fetches it from `VIASAT_IO_CACERT_URL` on startup.
+
+### Developer bypass (no browser)
+
+A developer running the image locally and registering it in an agentic CLI can skip OAuth
+entirely by leaving `MCP_AUTH_SECRET` unset and providing a token directly, e.g. in a `.env`:
+
+```bash
+VAULT_ADDR=https://vault.seceng-iam.viasat.io
+VAULT_TOKEN=hvs....   # from `vault login`
+```
 
 ## Integration with Visual Studio Code
 
