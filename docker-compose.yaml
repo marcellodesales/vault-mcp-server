@@ -16,16 +16,13 @@
 ####
 services:
   vault-mcp-server:
-    image: vionix.docker.artifactory.viasat.com/agentic/customer-service/tools/vault-mcp-server
-
-    platform: linux/x86_64
+    image: marcellodesales/vault-mcp-server
     build:
       context: .
       target: dev
 
     # The `dev` image defaults to `stdio`; run the StreamableHTTP transport on 8250.
     command: ["./vault-mcp-server", "streamable-http", "--transport-host", "0.0.0.0", "--transport-port", "8250"]
-
     ports:
       - "8250:8250"
 
@@ -53,16 +50,16 @@ services:
       MCP_AUTH_SECRET: ${MCP_AUTH_SECRET:-}
 
       # --- Upstream Vault ---
-      VAULT_ADDR: ${VAULT_ADDR:-https://vault.seceng-iam.viasat.io}
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.company.com}
       VAULT_NAMESPACE: ${VAULT_NAMESPACE:-}
 
       # Developer bypass: set VAULT_TOKEN (e.g. via .env) to skip browser OAuth entirely.
       VAULT_TOKEN: ${VAULT_TOKEN:-}
 
       # --- TLS trust (Viasat private CA) ---
-      VAULT_CACERT: ${VAULT_CACERT:-/viasat/certs/viasat.io.pem}
-      VIASAT_IO_CACERT_FILE: ${VIASAT_IO_CACERT_FILE:-/viasat/certs/viasat.io.pem}
-      VIASAT_IO_CACERT_URL: ${VIASAT_IO_CACERT_URL:-https://cacerts.viasat.io/all-certs.crt}
+      VAULT_CACERT: ${VAULT_CACERT:-/company/certs/company.io.pem}
+      VIASAT_IO_CACERT_FILE: ${VIASAT_IO_CACERT_FILE:-/company/certs/company.io.pem}
+      VIASAT_IO_CACERT_URL: ${VIASAT_IO_CACERT_URL:-https://company.com/all-certs.crt}
 
       # --- Vault auth methods used by the login page ---
       VAULT_AUTH_LDAP_MOUNT: ${VAULT_AUTH_LDAP_MOUNT:-ldap}
