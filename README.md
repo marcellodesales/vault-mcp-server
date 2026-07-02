@@ -87,7 +87,7 @@ OAuth / browser login (see [Browser OAuth](#browser-oauth-vault-login)):
 - `MCP_AUTH_CODE_TTL`: lifetime of authorization codes / login state (default: `5m`)
 - `MCP_AUTH_ACCESS_TTL`: lifetime of bearer access tokens (default: `12h`)
 - `VAULT_CACERT`: PEM CA bundle path used to verify the upstream Vault TLS cert (e.g. `/viasat/certs/viasat.io.pem`)
-- `VIASAT_IO_CACERT_FILE` / `VIASAT_IO_CACERT_URL`: location and source URL of the Viasat private CA bundle; fetched on startup only when the file is missing
+- `VIASAT_IO_CACERT_FILE` / `VIASAT_IO_CACERT_URL`: location and source URL of the Viasat private CA bundle; bootstrap it out-of-process (see `scripts/fetch-secrets/` or `docker-compose-viasat.yaml`)
 - `VAULT_AUTH_LDAP_MOUNT` (default `ldap`), `VAULT_AUTH_USERPASS_MOUNT` (default `userpass`), `VAULT_OIDC_MOUNT` (default `oidc`), `VAULT_OIDC_ROLE` (optional): Vault auth method mounts used by the login page
 
 ## HTTP Mode Configuration
@@ -149,8 +149,9 @@ docker compose up --build
 ### TLS to a private Vault (the Viasat CA)
 
 To trust `https://vault.seceng-iam.viasat.io`, mount the Viasat private CA bundle and point
-`VAULT_CACERT` at it. The `docker-compose.yaml` mounts `./data/certs:/viasat/certs` and, when the
-bundle file is missing, fetches it from `VIASAT_IO_CACERT_URL` on startup.
+`VAULT_CACERT` at it. Bootstrap the CA bundle out-of-process (for example via `scripts/fetch-secrets/`
+or the `certs-puller` service in `docker-compose-viasat.yaml`). The Vault MCP server will fail fast
+if a CA bundle path is configured but missing on disk.
 
 ### Developer bypass (no browser)
 

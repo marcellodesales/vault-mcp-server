@@ -30,7 +30,7 @@ const (
 
 	// VaultCACert points at a PEM CA bundle used to verify the upstream Vault
 	// TLS certificate. VIASATIOCACertFile is the shared Viasat private CA bundle
-	// used as a fallback (and primed by the CA bootstrap, see cabundle.go).
+	// used as a fallback (typically provisioned via an out-of-process bootstrap step).
 	VaultCACert        = "VAULT_CACERT"
 	VIASATIOCACertFile = "VIASAT_IO_CACERT_FILE"
 )

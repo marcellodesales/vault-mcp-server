@@ -2,35 +2,57 @@
 #### Vault MCP Server — StreamableHTTP transport with optional browser OAuth.
 ####
 #### Quickstart (developer bypass, no browser OAuth):
-####   export VAULT_ADDR=https://vault.seceng-iam.viasat.io
+####   export VAULT_ADDR=https://vault.seceng-iam.enterprise.io
 ####   export VAULT_TOKEN=hvs....          # from `vault login`
-####   docker compose up --build
+####   docker compose -f docker-compose-ENTERPRISE_EXAMPLE.yaml up --build
 ####
 #### Browser OAuth (MCP server acts as its own OAuth Authorization Server):
 ####   export MCP_AUTH_SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
-####   docker compose up --build
+####   docker compose -f docker-compose-ENTERPRISE_EXAMPLE.yaml up --build
 ####   # MCP clients discover /.well-known/* and are directed to /vault/login to
 ####   # authenticate (LDAP / userpass / token / OIDC SSO) against VAULT_ADDR.
 ####   # OIDC SSO uses http://localhost:8250/oidc/callback — the Vault CLI's
 ####   # pre-registered redirect URI — so no Vault admin changes are needed.
 ####
 services:
+  certs-puller:
+    build:
+      context: .
+      dockerfile: scripts/fetch-secrets/Dockerfile
+
+    # Fetches a private CA bundle into the shared volume.
+    restart: on-failure
+
+    volumes:
+      - enterprise-certs:/enterprise/certs
+
+    environment:
+      ENTERPRISE_IO_CACERT_FILE: ${ENTERPRISE_IO_CACERT_FILE:-/enterprise/certs/enterprise.io.pem}
+      ENTERPRISE_IO_CACERT_URL: ${ENTERPRISE_IO_CACERT_URL:-https://cacerts.enterprise.io/all-certs.crt}
+
   vault-mcp-server:
-    image: marcellodesales/vault-mcp-server
+    image: vionix.docker.artifactory.enterprise.com/agentic/customer-service/tools/vault-mcp-server
+
+    platform: linux/x86_64
     build:
       context: .
       target: dev
 
     # The `dev` image defaults to `stdio`; run the StreamableHTTP transport on 8250.
     command: ["./vault-mcp-server", "streamable-http", "--transport-host", "0.0.0.0", "--transport-port", "8250"]
+
     ports:
       - "8250:8250"
 
-    restart: unless-stopped
+    restart: on-failure
+
+    depends_on:
+      certs-puller:
+        condition: service_completed_successfully
 
     volumes:
-      # Optional: mount a private CA bundle into the container (and set VAULT_CACERT to trust it).
-      - ./data/certs:/company/certs:ro
+      # Shared volume populated by certs-puller.
+      - enterprise-certs:/enterprise/certs:ro
 
     environment:
       # --- Transport ---
@@ -49,16 +71,17 @@ services:
       MCP_AUTH_SECRET: ${MCP_AUTH_SECRET:-}
 
       # --- Upstream Vault ---
-      VAULT_ADDR: ${VAULT_ADDR:-https://vault.company.com}
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.seceng-iam.enterprise.io}
       VAULT_NAMESPACE: ${VAULT_NAMESPACE:-}
 
       # Developer bypass: set VAULT_TOKEN (e.g. via .env) to skip browser OAuth entirely.
       VAULT_TOKEN: ${VAULT_TOKEN:-}
 
       # --- TLS trust (private CA) ---
-      # If a CA bundle path is configured, the server expects it to exist on disk at startup.
-      VAULT_CACERT: ${VAULT_CACERT:-}
-      VIASAT_IO_CACERT_FILE: ${VIASAT_IO_CACERT_FILE:-}
+      # The server requires the bundle to exist on disk; certs-puller is responsible
+      # for downloading it into /enterprise/certs.
+      VAULT_CACERT: ${VAULT_CACERT:-/enterprise/certs/enterprise.io.pem}
+      ENTERPRISE_IO_CACERT_FILE: ${ENTERPRISE_IO_CACERT_FILE:-/enterprise/certs/enterprise.io.pem}
 
       # --- Vault auth methods used by the login page ---
       VAULT_AUTH_LDAP_MOUNT: ${VAULT_AUTH_LDAP_MOUNT:-ldap}
@@ -74,3 +97,6 @@ services:
 
       # --- Logging ---
       LOG_LEVEL: ${LOG_LEVEL:-info}
+
+volumes:
+  enterprise-certs:
