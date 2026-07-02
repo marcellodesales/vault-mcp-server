@@ -29,9 +29,8 @@ services:
     restart: unless-stopped
 
     volumes:
-      # Primes / caches the Viasat private CA bundle so TLS to vault.seceng-iam.viasat.io
-      # is trusted. If the file is missing it is fetched from VIASAT_IO_CACERT_URL on startup.
-      - ./data/certs:/viasat/certs
+      # Optional: mount a private CA bundle into the container (and set VAULT_CACERT to trust it).
+      - ./data/certs:/company/certs:ro
 
     environment:
       # --- Transport ---
@@ -56,10 +55,10 @@ services:
       # Developer bypass: set VAULT_TOKEN (e.g. via .env) to skip browser OAuth entirely.
       VAULT_TOKEN: ${VAULT_TOKEN:-}
 
-      # --- TLS trust (Viasat private CA) ---
-      VAULT_CACERT: ${VAULT_CACERT:-/company/certs/company.io.pem}
-      VIASAT_IO_CACERT_FILE: ${VIASAT_IO_CACERT_FILE:-/company/certs/company.io.pem}
-      VIASAT_IO_CACERT_URL: ${VIASAT_IO_CACERT_URL:-https://company.com/all-certs.crt}
+      # --- TLS trust (private CA) ---
+      # If a CA bundle path is configured, the server expects it to exist on disk at startup.
+      VAULT_CACERT: ${VAULT_CACERT:-}
+      VIASAT_IO_CACERT_FILE: ${VIASAT_IO_CACERT_FILE:-}
 
       # --- Vault auth methods used by the login page ---
       VAULT_AUTH_LDAP_MOUNT: ${VAULT_AUTH_LDAP_MOUNT:-ldap}

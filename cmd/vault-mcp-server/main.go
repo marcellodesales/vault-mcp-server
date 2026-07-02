@@ -156,14 +156,17 @@ func httpServerInit(ctx context.Context, hcServer *server.MCPServer, logger *log
 	// When unset, behavior is unchanged (VAULT_TOKEN via env/header — the dev bypass).
 	var bearer func(http.Handler) http.Handler
 	oauthCfg := oauth.LoadConfigFromEnv()
+
+	// Require the configured private CA bundle to be present on disk before booting.
+	// Bootstrap (download) should be performed out-of-process (e.g. docker-compose-viasat.yaml's
+	// certs-puller or scripts/fetch-secrets). This applies regardless of OAuth mode.
+	if err := requireConfiguredCACert(logger); err != nil {
+		return err
+	}
+
 	if oauthCfg.Enabled() {
 		if err := oauthCfg.Validate(); err != nil {
 			return fmt.Errorf("OAuth configuration error: %w", err)
-		}
-		// Bootstrap the Viasat private CA bundle so TLS to Vault is trusted.
-		// Logs "private ca root ready / fetched / disabled" depending on state.
-		if _, err := client.EnsurePrivateCARoot(ctx, logger); err != nil {
-			logger.WithError(err).Warn("failed to ensure Viasat private CA bundle; continuing")
 		}
 		oauthRouter, err := oauth.NewRouter(oauthCfg, logger)
 		if err != nil {
@@ -434,4 +437,33 @@ func getEndpointPath(cmd *cobra.Command) string {
 	}
 
 	return DefaultEndPointPath
+}
+
+func requireConfiguredCACert(logger *log.Logger) error {
+	candidates := make([]string, 0, 2)
+	for _, key := range []string{client.VaultCACert, client.VIASATIOCACertFile} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			candidates = append(candidates, v)
+		}
+	}
+
+	// No explicit CA bundle configured; rely on the system trust store.
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	for _, p := range candidates {
+		info, err := os.Stat(p)
+		if err == nil && !info.IsDir() && info.Size() > 0 {
+			if logger != nil {
+				logger.WithFields(log.Fields{
+					"path":       p,
+					"size_bytes": info.Size(),
+				}).Info("private ca root ready")
+			}
+			return nil
+		}
+	}
+
+	return fmt.Errorf("private ca root missing: expected one of %v to exist; bootstrap it (e.g. scripts/fetch-secrets) or mount it into the container", candidates)
 }
