@@ -53,7 +53,7 @@ Container vault-mcp-server-certs-puller-1 Exited
 vault-mcp-server-1  | {"level":"info","msg":"private ca root ready","path":"/enterprise/certs/company.io.pem","size_bytes":42728,"time":"2026-07-02T21:30:53.441396922Z"}
 vault-mcp-server-1  | {"addr":"0.0.0.0:8250","cors_mode":"development","endpoint":"/mcp","level":"info","msg":"http server starting","time":"2026-07-02T21:30:53.446006964Z","tls":"disabled (not recommended for production)"}
 vault-mcp-server-1  | {"cacert_file":"/enterprise/certs/company.io.pem","level":"info","msg":"vault connection","time":"2026-07-02T21:30:53.446043797Z","vault_addr":"https://vault.seceng-iam.company.io","vault_namespace":""}
-vault-mcp-server-1  | {"access_token_ttl":"12h0m0s","ldap_mount":"ldap","level":"info","login_methods":"ldap, userpass, token, oidc","login_page":"http://0.0.0.0:8250/vault/login","msg":"oauth enabled","oidc_callback":"http://0.0.0.0:8250/oidc/callback","oidc_mount":"oidc","oidc_role":"","time":"2026-07-02T21:30:53.446242214Z","userpass_mount":"userpass"}
+vault-mcp-server-1  | {"access_token_ttl":"12h0m0s","ldap_mount":"ldap","level":"info","login_methods":"ldap, userpass, oidc","login_page":"http://0.0.0.0:8250/vault/login","msg":"oauth enabled","oidc_callback":"http://0.0.0.0:8250/oidc/callback","oidc_mount":"oidc","oidc_role":"","time":"2026-07-02T21:30:53.446242214Z","userpass_mount":"userpass"}
 Gracefully Stopping... press Ctrl+C again to force
 Container vault-mcp-server-vault-mcp-server-1 Stopping 
 vault-mcp-server-1  | {"level":"info","msg":"Shutting down StreamableHTTP server...","time":"2026-07-02T21:30:56.562125382Z"}

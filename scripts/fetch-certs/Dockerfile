@@ -9,8 +9,8 @@ RUN apk add --no-cache ca-certificates
 FROM golang:1.25.5-alpine@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb AS build
 WORKDIR /build
 COPY go.mod go.sum ./
-COPY scripts/fetch-secrets ./scripts/fetch-secrets
-RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -o /out/certs-puller ./scripts/fetch-secrets
+COPY scripts/fetch-certs ./scripts/fetch-certs
+RUN --mount=type=cache,target=/root/.cache/go-build CGO_ENABLED=0 go build -o /out/certs-puller ./scripts/fetch-certs
 
 # Run as a tiny scratch image.
 FROM scratch
