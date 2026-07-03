@@ -162,7 +162,7 @@ docker compose up --build
 ### TLS to a private Vault (the Viasat CA)
 
 To trust `https://vault.seceng-iam.viasat.io`, mount the Viasat private CA bundle and point
-`VAULT_CACERT` at it. Bootstrap the CA bundle out-of-process (for example via `scripts/fetch-secrets/`
+`VAULT_CACERT` at it. Bootstrap the CA bundle out-of-process (for example via `scripts/fetch-certs/`
 or the `certs-puller` service in `docker-compose-viasat.yaml`). The Vault MCP server will fail fast
 if a CA bundle path is configured but missing on disk.
 
