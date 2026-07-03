@@ -67,7 +67,7 @@ and other MCP clients.
 The server can be configured using environment variables:
 
 - `VAULT_ADDR`: Vault server address (default: `http://127.0.0.1:8200`)
-- `VAULT_TOKEN`: Vault authentication token (required)
+- `VAULT_TOKEN`: Vault authentication token (required in stdio mode; optional in HTTP mode — if set it bypasses browser OAuth and is used for requests)
 - `VAULT_NAMESPACE`: Vault namespace (optional)
 - `TRANSPORT_MODE`: Set to `http` to enable HTTP mode
 - `TRANSPORT_HOST`: Host to bind to for HTTP mode (default: `127.0.0.1`)
@@ -82,7 +82,7 @@ The server can be configured using environment variables:
 
 OAuth / browser login (see [Browser OAuth](#browser-oauth-vault-login)):
 
-- `MCP_AUTH_SECRET`: base64url (32-byte) key that seals OAuth tokens. **Setting it enables OAuth**; unset disables it.
+- `MCP_AUTH_SECRET`: base64url (32-byte) key that seals OAuth tokens. Optional; if unset the server generates one at startup and logs it at INFO. Set it to keep bearer tokens valid across restarts.
 - `MCP_SERVER_URL`: public base URL advertised in OAuth metadata/redirects (default: derived per-request from the `Host` / `X-Forwarded-*` headers)
 - `MCP_AUTH_CODE_TTL`: lifetime of authorization codes / login state (default: `5m`)
 - `MCP_AUTH_ACCESS_TTL`: lifetime of bearer access tokens (default: `12h`)
@@ -92,18 +92,21 @@ OAuth / browser login (see [Browser OAuth](#browser-oauth-vault-login)):
 
 ## HTTP Mode Configuration
 
-In HTTP mode, Vault configuration can be provided through multiple methods (in order of precedence):
+In HTTP mode, the `/mcp` endpoint always requires authentication. You can satisfy this requirement in one of two ways:
 
-- **HTTP Query**: `VAULT_ADDR`
-- **HTTP Headers**: `VAULT_ADDR`, `X-Vault-Token`, and `X-Vault-Namespace`
-- **Environment Variables**: Standard `VAULT_ADDR`, `VAULT_TOKEN`, and `VAULT_NAMESPACE` env vars
+- **Browser OAuth** (recommended for interactive MCP clients): the client is redirected to `/vault/login` and then calls `/mcp` with `Authorization: Bearer <token>` minted by this server.
+- **Token bypass** (for clients that cannot do OAuth): provide a Vault token externally via `VAULT_TOKEN` (env) or the `X-Vault-Token` request header.
+
+Bearer tokens are sealed with `MCP_AUTH_SECRET`. If you let the server auto-generate it on each start, previously issued bearer tokens stop working after restart (clients will re-authenticate).
+
+Upstream Vault connection details used for the login flow are configured via environment variables (`VAULT_ADDR`, `VAULT_NAMESPACE`, `VAULT_CACERT`, etc.).
 
 ### Middleware Stack
 
 The HTTP server includes a comprehensive middleware stack:
 
 - **CORS Middleware**: Enables cross-origin requests with appropriate headers
-- **Bearer (OAuth) Middleware**: When OAuth is enabled, unseals the bearer token and injects the Vault credentials into the request context
+- **Bearer (OAuth) Middleware**: Unseals the bearer token and injects the Vault credentials into the request context (or bypasses OAuth when a Vault token is supplied externally)
 - **Vault Context Middleware**: Extracts Vault configuration and adds to request context
 - **Logging Middleware**: Structured HTTP request logging
 
@@ -115,15 +118,26 @@ against your Vault in the browser — no token copy/paste required. The Vault to
 during login is encrypted (AES-256-GCM) into the OAuth bearer token; nothing is stored
 server-side (the flow is fully stateless).
 
-OAuth is **opt-in**: it activates only when `MCP_AUTH_SECRET` is set. With it unset, the
-server behaves exactly as before (Vault token via env/header — see the developer bypass below).
+`MCP_AUTH_SECRET` seals the issued bearer tokens. It is optional; if unset the server generates one at
+startup and logs it at INFO (set it to keep bearer tokens valid across restarts).
 
-Enable it:
+If you cannot do OAuth, you can bypass the browser flow by providing a Vault token externally
+(`VAULT_TOKEN` env var or `X-Vault-Token` request header).
+
+Token bypass (no browser OAuth):
 
 ```bash
-# 32 random bytes, base64url (no padding)
-export MCP_AUTH_SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
 export VAULT_ADDR=https://vault.seceng-iam.viasat.io
+export VAULT_TOKEN=hvs....
+docker compose up --build
+```
+
+Browser OAuth:
+
+```bash
+export VAULT_ADDR=https://vault.seceng-iam.viasat.io
+# Optional: set to keep bearer tokens valid across restarts
+export MCP_AUTH_SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
 docker compose up --build
 ```
 
@@ -132,10 +146,9 @@ docker compose up --build
 1. The MCP client discovers `/.well-known/oauth-protected-resource/mcp` and
    `/.well-known/oauth-authorization-server`, dynamically registers (`/register`), and opens
    `/authorize` (authorization code + PKCE).
-2. `/authorize` redirects the browser to `/vault/login`, which offers four ways to authenticate:
+2. `/authorize` redirects the browser to `/vault/login`, which offers three ways to authenticate:
    - **LDAP** — `auth/<ldap mount>/login/<user>`
    - **Userpass** — `auth/<userpass mount>/login/<user>`
-   - **Vault token** — paste an existing token (validated via `auth/token/lookup-self`)
    - **OIDC (SSO)** — Vault `auth/<oidc mount>/oidc/auth_url`; the browser is sent to your IdP
      and returns to `/vault/oidc/callback`. The callback URL is computed **dynamically from the
      current host**, so it works behind any hostname/reverse proxy.
@@ -153,19 +166,12 @@ To trust `https://vault.seceng-iam.viasat.io`, mount the Viasat private CA bundl
 or the `certs-puller` service in `docker-compose-viasat.yaml`). The Vault MCP server will fail fast
 if a CA bundle path is configured but missing on disk.
 
-### Developer bypass (no browser)
-
-A developer running the image locally and registering it in an agentic CLI can skip OAuth
-entirely by leaving `MCP_AUTH_SECRET` unset and providing a token directly, e.g. in a `.env`:
-
-```bash
-VAULT_ADDR=https://vault.seceng-iam.viasat.io
-VAULT_TOKEN=hvs....   # from `vault login`
-```
 
 ## Integration with Visual Studio Code
 
 1. In your project workspace root, create or open the `.vscode/mcp.json` configuration file. Alternatively, to add an MCP to your user configuration, run the `MCP: Open User Configuration` command, which opens the mcp.json file in your user profile. If the file does not exist, VS Code creates it for you.
+
+Streamable HTTP mode supports browser OAuth; OAuth-capable MCP clients will be directed to `/vault/login` to authenticate. If you run the server with `VAULT_TOKEN`, clients can skip OAuth.
 
     <table>
     <tr><th>Streamable HTTP mode</th><th>Stdio mode</th></tr>
@@ -174,27 +180,9 @@ VAULT_TOKEN=hvs....   # from `vault login`
 
     ```json
         {
-            "inputs": [
-            {
-                "type": "promptString",
-                "id": "vault_token",
-                "description": "Vault Token",
-                "password": true
-            },
-            {
-                "type": "promptString",
-                "id": "vault_namespace",
-                "description": "Vault Namespace (optional)",
-                "password": false
-            }
-            ],
             "servers": {
                 "vault-mcp-server": {
-                    "url": "http://localhost:8080/mcp?VAULT_ADDR=http://127.0.0.1:8200",
-                    "headers": {
-                        "X-Vault-Token": "${input:vault_token}",
-                        "X-Vault-Namespace": "${input:vault_namespace}"
-                    }
+                    "url": "http://localhost:8080/mcp"
                 }
             }
         }
@@ -301,7 +289,11 @@ docker logs vault-dev
 Run the Vault MCP server:
 
 ```bash
-docker run --network=mcp -p 8080:8080 -e VAULT_ADDR='http://vault-dev:8200' -e VAULT_TOKEN='<your-token-from-last-step>' -e TRANSPORT_MODE='http' vault-mcp-server:dev
+# Option A: token bypass (no browser OAuth)
+docker run --network=mcp -p 8080:8080 -e VAULT_ADDR='http://vault-dev:8200' -e VAULT_TOKEN='hvs....' -e TRANSPORT_MODE='http' vault-mcp-server:dev
+
+# Option B: browser OAuth (MCP_AUTH_SECRET optional)
+docker run --network=mcp -p 8080:8080 -e VAULT_ADDR='http://vault-dev:8200' -e MCP_AUTH_SECRET="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" -e TRANSPORT_MODE='http' vault-mcp-server:dev
 ```
 
 ## Available Tools
