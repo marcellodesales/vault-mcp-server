@@ -64,27 +64,31 @@ func (r *Router) Register(mux *http.ServeMux) {
 }
 
 // BearerMiddleware protects the wrapped MCP handler. A valid sealed bearer token
-// is unsealed and its Vault credentials injected into the request context. When
-// no bearer is present it permits the developer bypass (env VAULT_TOKEN set),
-// otherwise it returns 401 with a WWW-Authenticate challenge so MCP clients begin
-// the OAuth flow.
+// is unsealed and its Vault credentials injected into the request context.
+//
+// If a Vault token is supplied externally (via VAULT_TOKEN env var or X-Vault-Token
+// header), the request is permitted when the bearer is missing or invalid.
+//
+// Otherwise, when the bearer is missing or invalid it returns 401 with a
+// WWW-Authenticate challenge so MCP clients begin the OAuth flow.
 func (r *Router) BearerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		authz := req.Header.Get("Authorization")
 		if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
 			token := strings.TrimSpace(authz[len("bearer "):])
 			var at AccessTokenData
-			if _, err := r.tokenSvc.Parse(string(TokenTypeAccessToken), token, &at); err != nil {
-				r.challenge(w, req)
+			if _, err := r.tokenSvc.Parse(string(TokenTypeAccessToken), token, &at); err == nil {
+				ctx := client.ContextWithVaultAuth(req.Context(), at.VaultAddr, at.VaultToken, at.VaultNamespace)
+				next.ServeHTTP(w, req.WithContext(ctx))
 				return
 			}
-			ctx := client.ContextWithVaultAuth(req.Context(), at.VaultAddr, at.VaultToken, at.VaultNamespace)
-			next.ServeHTTP(w, req.WithContext(ctx))
-			return
+			// Fall through to external token bypass.
 		}
 
-		// Developer bypass: a VAULT_TOKEN in the environment skips browser OAuth.
-		if strings.TrimSpace(os.Getenv(client.VaultToken)) != "" {
+		// External token bypass (for clients that cannot do OAuth).
+		if strings.TrimSpace(req.Header.Get(client.VaultHeaderToken)) != "" ||
+			strings.TrimSpace(req.Header.Get(client.VaultToken)) != "" ||
+			strings.TrimSpace(os.Getenv(client.VaultToken)) != "" {
 			next.ServeHTTP(w, req)
 			return
 		}

@@ -53,10 +53,9 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
       <form method="POST" action="/vault/login">
         <input type="hidden" name="auth_state" value="{{.AuthState}}" />
         <label for="method">Authentication method</label>
-        <select id="method" name="method" onchange="toggle()">
+        <select id="method" name="method">
           <option value="ldap">LDAP (username / password)</option>
           <option value="userpass">Userpass (username / password)</option>
-          <option value="token">Vault token (paste)</option>
         </select>
 
         <div id="userpassFields">
@@ -64,11 +63,6 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
           <input id="username" name="username" type="text" autocomplete="username" placeholder="e.g. mdesales" />
           <label for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="current-password" />
-        </div>
-
-        <div id="tokenFields" class="hide">
-          <label for="token">Vault token</label>
-          <input id="token" name="token" type="password" placeholder="hvs...." />
         </div>
 
         <button type="submit">Sign in</button>
@@ -85,14 +79,6 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
       <div class="note">Credentials/tokens are encrypted into your MCP bearer token. Treat them as sensitive.</div>
     {{end}}
   </div>
-  <script>
-    function toggle() {
-      var m = document.getElementById('method').value;
-      document.getElementById('userpassFields').className = (m === 'token') ? 'hide' : '';
-      document.getElementById('tokenFields').className = (m === 'token') ? '' : 'hide';
-    }
-    toggle();
-  </script>
 </body>
 </html>`))
 
@@ -150,28 +136,20 @@ func (r *Router) handleLoginSubmit(w http.ResponseWriter, req *http.Request) {
 
 	params := r.vaultAuthParams()
 
+	username := strings.TrimSpace(req.FormValue("username"))
+	password := req.FormValue("password")
+	if username == "" || password == "" {
+		r.renderLogin(w, req, encState, "username and password are required")
+		return
+	}
+
 	var vaultToken string
 	var err error
 	switch method {
-	case "token":
-		vaultToken = strings.TrimSpace(req.FormValue("token"))
-		if vaultToken == "" {
-			r.renderLogin(w, req, encState, "a Vault token is required")
-			return
-		}
-		err = client.LookupToken(ctx, params, vaultToken)
-	case "userpass", "ldap":
-		username := strings.TrimSpace(req.FormValue("username"))
-		password := req.FormValue("password")
-		if username == "" || password == "" {
-			r.renderLogin(w, req, encState, "username and password are required")
-			return
-		}
-		if method == "ldap" {
-			vaultToken, err = client.LoginLDAP(ctx, params, r.cfg.LDAPMount, username, password)
-		} else {
-			vaultToken, err = client.LoginUserpass(ctx, params, r.cfg.UserpassMount, username, password)
-		}
+	case "ldap":
+		vaultToken, err = client.LoginLDAP(ctx, params, r.cfg.LDAPMount, username, password)
+	case "userpass":
+		vaultToken, err = client.LoginUserpass(ctx, params, r.cfg.UserpassMount, username, password)
 	default:
 		r.renderLogin(w, req, encState, "unsupported authentication method")
 		return

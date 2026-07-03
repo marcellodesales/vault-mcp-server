@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	stdlog "log"
@@ -145,65 +147,73 @@ func httpServerInit(ctx context.Context, hcServer *server.MCPServer, logger *log
 	// Load CORS configuration
 	corsConfig := client.LoadCORSConfigFromEnv()
 
-	// Create a security wrapper around the streamable server
-	streamableServer := client.NewSecurityHandler(baseStreamableServer, corsConfig.AllowedOrigins, corsConfig.Mode, logger)
+	var streamableServer http.Handler = baseStreamableServer
 
 	mux := http.NewServeMux()
 
-	// When MCP_AUTH_SECRET is set, the server doubles as an OAuth Authorization
-	// Server: MCP clients are sent through a browser login against the upstream
-	// Vault and the resulting Vault token is sealed into the bearer access token.
-	// When unset, behavior is unchanged (VAULT_TOKEN via env/header — the dev bypass).
+	// StreamableHTTP supports browser-based OAuth (OIDC / LDAP / userpass) to obtain
+	// an upstream Vault token. MCP_AUTH_SECRET is optional: when unset, a random
+	// secret is generated at startup and logged at INFO level.
 	var bearer func(http.Handler) http.Handler
 	oauthCfg := oauth.LoadConfigFromEnv()
+	if !oauthCfg.Enabled() {
+		secret, err := generateMCPAuthSecret()
+		if err != nil {
+			return fmt.Errorf("generate MCP_AUTH_SECRET: %w", err)
+		}
+		oauthCfg.MCPAuthSecret = secret
+		logger.WithFields(log.Fields{
+			"mcp_auth_secret": secret,
+			"hint":            "set MCP_AUTH_SECRET to persist bearer tokens across restarts",
+		}).Info("generated MCP_AUTH_SECRET")
+	}
 
 	// Require the configured private CA bundle to be present on disk before booting.
 	// Bootstrap (download) should be performed out-of-process (e.g. docker-compose-viasat.yaml's
-	// certs-puller or scripts/fetch-secrets). This applies regardless of OAuth mode.
+	// certs-puller or scripts/fetch-secrets).
 	if err := requireConfiguredCACert(logger); err != nil {
 		return err
 	}
 
-	if oauthCfg.Enabled() {
-		if err := oauthCfg.Validate(); err != nil {
-			return fmt.Errorf("OAuth configuration error: %w", err)
-		}
-		oauthRouter, err := oauth.NewRouter(oauthCfg, logger)
-		if err != nil {
-			return fmt.Errorf("OAuth init error: %w", err)
-		}
-		oauthRouter.Register(mux)
-		bearer = oauthRouter.BearerMiddleware
+	if err := oauthCfg.Validate(); err != nil {
+		return fmt.Errorf("OAuth configuration error: %w", err)
+	}
+	oauthRouter, err := oauth.NewRouter(oauthCfg, logger)
+	if err != nil {
+		return fmt.Errorf("OAuth init error: %w", err)
+	}
+	oauthRouter.Register(mux)
+	bearer = oauthRouter.BearerMiddleware
 
-		if oauthCfg.OIDCCallbackPort > 0 {
-			callbackServer := &http.Server{
-				Addr:              fmt.Sprintf(":%d", oauthCfg.OIDCCallbackPort),
-				Handler:           oauthRouter.OIDCCallbackMux(),
-				ReadHeaderTimeout: 10 * time.Second,
-				ReadTimeout:       30 * time.Second,
-				WriteTimeout:      30 * time.Second,
+	if oauthCfg.OIDCCallbackPort > 0 {
+		callbackServer := &http.Server{
+			Addr:              fmt.Sprintf(":%d", oauthCfg.OIDCCallbackPort),
+			Handler:           oauthRouter.OIDCCallbackMux(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+		}
+		go func() {
+			if err := callbackServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.WithError(err).Warn("OIDC callback server error")
 			}
-			go func() {
-				if err := callbackServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					logger.WithError(err).Warn("OIDC callback server error")
-				}
-			}()
-			go func() {
-				<-ctx.Done()
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = callbackServer.Shutdown(shutdownCtx)
-			}()
-		}
+		}()
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = callbackServer.Shutdown(shutdownCtx)
+		}()
 	}
 
-	// Apply middleware (innermost first). The bearer middleware unseals the OAuth
-	// token into the context; VaultContextMiddleware then leaves those values
-	// intact (it only overrides when a header/env value is present).
-	if bearer != nil {
-		streamableServer = bearer(streamableServer)
-	}
+	// Apply middleware (innermost first).
+	// - bearer: validates OAuth bearer tokens (or allows VAULT_TOKEN from env/header)
+	// - VaultContext: picks up Vault settings from request/env (bearer wins when present)
+	// - security handler: enforces CORS and handles OPTIONS preflight
+	// - logging: outermost request logging
+	streamableServer = bearer(streamableServer)
 	streamableServer = client.VaultContextMiddleware(logger)(streamableServer)
+	streamableServer = client.NewSecurityHandler(streamableServer, corsConfig.AllowedOrigins, corsConfig.Mode, logger)
 	streamableServer = client.LoggingMiddleware(logger)(streamableServer)
 
 	// Handle the /mcp endpoint with the streamable server (with security wrapper)
@@ -268,23 +278,17 @@ func httpServerInit(ctx context.Context, hcServer *server.MCPServer, logger *log
 			"cacert_file":     client.EffectiveCACertFile(),
 		}).Info("vault connection")
 
-		if oauthCfg.Enabled() {
-			oidcCallback := oauthCfg.OIDCCallbackURL(fmt.Sprintf("http://%s", addr))
-			logger.WithFields(log.Fields{
-				"login_page":         fmt.Sprintf("http://%s/vault/login", addr),
-				"login_methods":      "ldap, userpass, token, oidc",
-				"ldap_mount":         oauthCfg.LDAPMount,
-				"userpass_mount":     oauthCfg.UserpassMount,
-				"oidc_mount":         oauthCfg.OIDCMount,
-				"oidc_role":          oauthCfg.OIDCRole,
-				"oidc_callback":      oidcCallback,
-				"access_token_ttl":   oauthCfg.AccessTokenTTL.String(),
-			}).Info("oauth enabled")
-		} else {
-			logger.WithFields(log.Fields{
-				"hint": "set MCP_AUTH_SECRET to enable browser login",
-			}).Info("oauth disabled — using VAULT_TOKEN from env/header")
-		}
+		oidcCallback := oauthCfg.OIDCCallbackURL(fmt.Sprintf("http://%s", addr))
+		logger.WithFields(log.Fields{
+			"login_page":       fmt.Sprintf("http://%s/vault/login", addr),
+			"login_methods":    "ldap, userpass, oidc",
+			"ldap_mount":       oauthCfg.LDAPMount,
+			"userpass_mount":   oauthCfg.UserpassMount,
+			"oidc_mount":       oauthCfg.OIDCMount,
+			"oidc_role":        oauthCfg.OIDCRole,
+			"oidc_callback":    oidcCallback,
+			"access_token_ttl": oauthCfg.AccessTokenTTL.String(),
+		}).Info("oauth enabled")
 	}
 	// ── End bootstrap summary ─────────────────────────────────────────────────
 
@@ -437,6 +441,14 @@ func getEndpointPath(cmd *cobra.Command) string {
 	}
 
 	return DefaultEndPointPath
+}
+
+func generateMCPAuthSecret() (string, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(key), nil
 }
 
 func requireConfiguredCACert(logger *log.Logger) error {
