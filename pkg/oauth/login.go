@@ -94,7 +94,7 @@ type loginPageData struct {
 func (r *Router) vaultLogin(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case http.MethodGet:
-		r.renderLogin(w, req, req.URL.Query().Get("auth_state"), "")
+		r.renderLogin(w, req, req.URL.Query().Get("auth_state"), req.URL.Query().Get("error"))
 	case http.MethodPost:
 		r.handleLoginSubmit(w, req)
 	default:
@@ -201,6 +201,41 @@ func (r *Router) issueAuthCodeAndRedirect(w http.ResponseWriter, req *http.Reque
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = loginTemplate.Execute(w, loginPageData{RedirectURL: cb.String()})
 }
+
+// renderCallbackError renders a standalone error card using the same styles as
+// the login page. It is used by the OIDC callback handler when it cannot
+// redirect back to the login page (e.g., unknown or expired pending state).
+func (r *Router) renderCallbackError(w http.ResponseWriter, msg string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = callbackErrorTemplate.Execute(w, msg)
+}
+
+var callbackErrorTemplate = template.Must(template.New("callbackError").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vault MCP — Sign In Error</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; background:#f5f5f5; margin:0; }
+    .card { max-width:480px; margin:8vh auto; background:#fff; padding:24px; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.08); }
+    h1 { margin:0 0 8px; font-size:20px; }
+    p { margin:0 0 16px; color:#555; font-size:14px; line-height:1.4; }
+    .err { background:#fdecea; border:1px solid #f5c6cb; color:#7a1c1c; padding:10px 12px; border-radius:8px; margin-bottom:12px; font-size:13px; }
+    .note { background:#fff8e1; border-left:4px solid #ff8f00; padding:10px 12px; border-radius:8px; margin-top:16px; font-size:13px; color:#555; }
+    a { color:#0052cc; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Vault MCP Server</h1>
+    <div class="err">{{.}}</div>
+    <div class="note">Please close this tab and restart the sign-in flow from your MCP client.</div>
+  </div>
+</body>
+</html>`))
 
 func truncateErr(err error) string {
 	s := strings.ReplaceAll(err.Error(), "\n", " ")

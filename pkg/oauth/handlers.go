@@ -133,8 +133,27 @@ func (r *Router) authorize(w http.ResponseWriter, req *http.Request) {
 
 	var reg ClientRegistrationData
 	if _, err := r.tokenSvc.Parse(string(TokenTypeClientID), clientID, &reg); err != nil {
-		http.Error(w, "invalid client_id", http.StatusBadRequest)
-		return
+		// The client_id is a sealed token minted with the server's current
+		// MCP_AUTH_SECRET. If decryption fails the server most likely restarted
+		// (generating a new secret), invalidating the stored registration.
+		// Rather than surfacing an error the user cannot act on, re-register the
+		// client on-the-fly using the redirect_uri already present in the request
+		// so the OIDC flow continues uninterrupted.
+		if redirectURI == "" {
+			r.renderCallbackError(w, "MCP client registration is no longer valid and no redirect_uri was provided — please reconnect your MCP client.")
+			return
+		}
+		u, parseErr := url.Parse(redirectURI)
+		if parseErr != nil || u.Scheme == "" || u.Host == "" {
+			r.renderCallbackError(w, "MCP client registration is no longer valid and the redirect_uri is not a valid URL — please reconnect your MCP client.")
+			return
+		}
+		r.logger.WithField("redirect_uri", redirectURI).Info("stale client_id — transparently re-registering MCP client for this authorize request")
+		reg = ClientRegistrationData{
+			ClientIDIssuedAt:        time.Now().UTC().Unix(),
+			RedirectURIs:            []string{redirectURI},
+			TokenEndpointAuthMethod: "none",
+		}
 	}
 	if !contains(reg.RedirectURIs, redirectURI) {
 		http.Error(w, "redirect_uri not registered", http.StatusBadRequest)

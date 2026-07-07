@@ -143,8 +143,10 @@ func GetVaultClient(sessionId string) *api.Client {
 	return nil
 }
 
-// DeleteVaultClient removes the Vault client for the given session
+// DeleteVaultClient removes the Vault client for the given session and stops
+// any background token renewal loop.
 func DeleteVaultClient(sessionId string) {
+	StopTokenRenewal(sessionId)
 	activeClients.Delete(sessionId)
 }
 
@@ -231,6 +233,11 @@ func CreateVaultClientForSession(ctx context.Context, session server.ClientSessi
 		"session_id": session.SessionID(),
 		"vault_addr": vaultAddress,
 	}).Info("Created Vault client for session")
+
+	// Keep the Vault token alive for the duration of the working session. Vault
+	// token renewal does not change the token string — it only extends the TTL
+	// on Vault's side — so the existing MCP bearer token continues to work.
+	StartTokenRenewal(session.SessionID(), newClient, logger)
 
 	return newClient, nil
 }

@@ -106,8 +106,42 @@ func (r *Router) oidcCallback(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
 	vaultState := q.Get("state")
 	code := q.Get("code")
+	oidcErr := q.Get("error")
+
+	// IdP returned an error (e.g. access_denied from bad credentials).
+	// Recover the pending state so we can redirect back to the login page with
+	// a human-readable error message rendered in the same styled UI.
+	if oidcErr != "" {
+		errDesc := q.Get("error_description")
+		if errDesc == "" {
+			errDesc = oidcErr
+		}
+		friendlyMsg := "OIDC sign-in failed: " + errDesc
+
+		if vaultState != "" {
+			if v, ok := oidcStateMap.LoadAndDelete(vaultState); ok {
+				pending := v.(oidcPending)
+				if !time.Now().After(pending.ExpiresAt) {
+					serverURL := r.cfg.ServerURL
+					if serverURL == "" {
+						serverURL = r.cfg.BaseURL(req)
+					}
+					loginURL := serverURL + "/vault/login?auth_state=" +
+						url.QueryEscape(pending.SealedAuthState) + "&error=" +
+						url.QueryEscape(friendlyMsg)
+					http.Redirect(w, req, loginURL, http.StatusFound)
+					return
+				}
+			}
+		}
+
+		// Pending state not found or expired — render a standalone error card.
+		r.renderCallbackError(w, friendlyMsg)
+		return
+	}
+
 	if vaultState == "" || code == "" {
-		http.Error(w, "missing state or code", http.StatusBadRequest)
+		r.renderCallbackError(w, "missing state or code in callback — please restart the login")
 		return
 	}
 
