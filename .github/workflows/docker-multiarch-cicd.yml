@@ -31,7 +31,7 @@ jobs:
   docker-multiarch:
     name: 🐋 docker
     needs: [ setup ]
-    uses: vionix-proj/github-platform/.github/workflows/docker-multiarch-cicd.yaml@codex/update-release-build-to-ref-build-and-create-new-release-bui 
+    uses: vionix-proj/github-platform/.github/workflows/docker-multiarch-cicd.yaml@main
     permissions:
       contents: write           # Make and push commits to the repo 
       packages: write           # Create a docker package in the repo
