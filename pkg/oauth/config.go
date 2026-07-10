@@ -6,6 +6,7 @@ package oauth
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -99,6 +100,27 @@ func (c Config) BaseURL(r *http.Request) string {
 	}
 
 	return scheme + "://" + strings.TrimSpace(host)
+}
+
+// BasePath returns the URL path prefix under which this server is publicly
+// mounted (e.g. "/mcps/vault-mcp"), derived from ServerURL. It is empty when the
+// server is served at the host root or ServerURL is unset.
+//
+// Interactive HTML served by this server (the login page's form actions) MUST
+// prefix its links with this value. A reverse proxy strips the prefix before the
+// request reaches us, so we never see it on the wire and cannot infer it from the
+// request; only ServerURL carries the public mount point. Root-relative links
+// (e.g. "/vault/oidc/start") resolve against the host root in the browser and 404
+// behind a path prefix.
+func (c Config) BasePath() string {
+	if c.ServerURL == "" {
+		return ""
+	}
+	u, err := url.Parse(c.ServerURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(u.Path, "/")
 }
 
 func getenv(key, fallback string) string {
