@@ -50,7 +50,7 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
       <p>Sign in to <strong>{{.VaultAddr}}</strong>. Your Vault token is encrypted into your MCP bearer token.</p>
       {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
 
-      <form method="POST" action="/vault/login">
+      <form method="POST" action="{{.BasePath}}/vault/login">
         <input type="hidden" name="auth_state" value="{{.AuthState}}" />
         <label for="method">Authentication method</label>
         <select id="method" name="method">
@@ -70,7 +70,7 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 
       {{if .OIDCEnabled}}
       <hr />
-      <form method="POST" action="/vault/oidc/start">
+      <form method="POST" action="{{.BasePath}}/vault/oidc/start">
         <input type="hidden" name="auth_state" value="{{.AuthState}}" />
         <button type="submit" class="oidc">Sign in with OIDC (SSO)</button>
       </form>
@@ -88,6 +88,10 @@ type loginPageData struct {
 	Error       string
 	RedirectURL string
 	OIDCEnabled bool
+	// BasePath is the public path prefix (e.g. "/mcps/vault-mcp") the server is
+	// mounted under, prepended to the login/OIDC form actions so they resolve
+	// behind a reverse-proxy prefix instead of the host root. Empty at the root.
+	BasePath string
 }
 
 // vaultLogin renders the login page (GET) and handles credential submission (POST).
@@ -114,6 +118,7 @@ func (r *Router) renderLogin(w http.ResponseWriter, req *http.Request, authState
 		VaultAddr:   r.vaultAuthParams().Address,
 		Error:       errMsg,
 		OIDCEnabled: true,
+		BasePath:    r.cfg.BasePath(),
 	})
 }
 
