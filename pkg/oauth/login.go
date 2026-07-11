@@ -54,11 +54,18 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
         <input type="hidden" name="auth_state" value="{{.AuthState}}" />
         <label for="method">Authentication method</label>
         <select id="method" name="method">
+          <option value="token" selected>Vault token (paste)</option>
           <option value="ldap">LDAP (username / password)</option>
           <option value="userpass">Userpass (username / password)</option>
         </select>
 
-        <div id="userpassFields">
+        <div id="tokenFields">
+          <label for="vault_token">Vault token</label>
+          <input id="vault_token" name="vault_token" type="password" autocomplete="off" spellcheck="false" placeholder="hvs.CAES…" />
+          <div class="note">Run <code>vault login</code> on your machine and paste the token here. It is validated and encrypted into your MCP bearer token; nothing is stored server-side. Your session lasts as long as the token's own TTL.</div>
+        </div>
+
+        <div id="userpassFields" style="display:none">
           <label for="username">Username</label>
           <input id="username" name="username" type="text" autocomplete="username" placeholder="e.g. mdesales" />
           <label for="password">Password</label>
@@ -67,6 +74,20 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 
         <button type="submit">Sign in</button>
       </form>
+      <script>
+        (function () {
+          var sel = document.getElementById('method');
+          var tok = document.getElementById('tokenFields');
+          var up = document.getElementById('userpassFields');
+          function sync() {
+            var isToken = sel.value === 'token';
+            tok.style.display = isToken ? '' : 'none';
+            up.style.display = isToken ? 'none' : '';
+          }
+          sel.addEventListener('change', sync);
+          sync();
+        })();
+      </script>
 
       {{if .OIDCEnabled}}
       <hr />
@@ -140,6 +161,25 @@ func (r *Router) handleLoginSubmit(w http.ResponseWriter, req *http.Request) {
 	defer cancel()
 
 	params := r.vaultAuthParams()
+
+	// Vault token method: the user pastes a token minted locally (`vault login`).
+	// Validate it (auth/token/lookup-self) and seal it into the MCP bearer — no
+	// username/password and no OIDC redirect needed. The token's own TTL governs
+	// how long the resulting MCP session can call Vault.
+	if method == "token" {
+		vaultToken := strings.TrimSpace(req.FormValue("vault_token"))
+		if vaultToken == "" {
+			r.renderLogin(w, req, encState, "paste a Vault token (run `vault login` locally to get one)")
+			return
+		}
+		if err := client.LookupToken(ctx, params, vaultToken); err != nil {
+			r.logger.WithError(err).Warn("vault token login failed")
+			r.renderLogin(w, req, encState, "vault token is invalid or expired: "+truncateErr(err))
+			return
+		}
+		r.issueAuthCodeAndRedirect(w, req, st, vaultToken)
+		return
+	}
 
 	username := strings.TrimSpace(req.FormValue("username"))
 	password := req.FormValue("password")
