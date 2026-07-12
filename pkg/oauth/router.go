@@ -9,7 +9,10 @@
 package oauth
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -19,6 +22,40 @@ import (
 	"github.com/hashicorp/vault-mcp-server/pkg/client"
 	log "github.com/sirupsen/logrus"
 )
+
+// publicMCPMethods are JSON-RPC methods a client may call WITHOUT authentication
+// so registries, catalogs, and agents can DISCOVER the toolset. Tool execution
+// (tools/call) and everything else still require a valid bearer / X-Vault-Token.
+var publicMCPMethods = map[string]bool{
+	"initialize":                true,
+	"notifications/initialized": true,
+	"tools/list":                true,
+	"prompts/list":              true,
+	"resources/list":            true,
+	"resources/templates/list":  true,
+	"ping":                      true,
+}
+
+// isPublicMCPRequest reports whether the POST body is a JSON-RPC discovery method
+// that may proceed unauthenticated. It reads and RESTORES the body so the
+// downstream MCP handler still sees it.
+func isPublicMCPRequest(req *http.Request) bool {
+	if req.Method != http.MethodPost || req.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+	if err != nil {
+		return false
+	}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	var rpc struct {
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal(body, &rpc); err != nil {
+		return false
+	}
+	return publicMCPMethods[rpc.Method]
+}
 
 // Router wires the OAuth endpoints and bearer middleware.
 type Router struct {
@@ -89,6 +126,13 @@ func (r *Router) BearerMiddleware(next http.Handler) http.Handler {
 		if strings.TrimSpace(req.Header.Get(client.VaultHeaderToken)) != "" ||
 			strings.TrimSpace(req.Header.Get(client.VaultToken)) != "" ||
 			strings.TrimSpace(os.Getenv(client.VaultToken)) != "" {
+			next.ServeHTTP(w, req)
+			return
+		}
+
+		// Discovery methods (tools/list, initialize, …) proceed without auth so
+		// registries/agents can enumerate the toolset; tool execution still 401s.
+		if isPublicMCPRequest(req) {
 			next.ServeHTTP(w, req)
 			return
 		}
