@@ -33,6 +33,7 @@ jobs:
     needs: [ setup ]
     uses: vionix-proj/github-platform/.github/workflows/docker-multiarch-cicd.yaml@main
     permissions:
+      actions: write
       contents: write           # Make and push commits to the repo 
       packages: write           # Create a docker package in the repo
       id-token: write           # Acquire a github token 
